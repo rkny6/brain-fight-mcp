@@ -106,6 +106,22 @@ export const SidePositionSchema = z.object({
 });
 export type SidePosition = z.infer<typeof SidePositionSchema>;
 
+export const ContinuityPriorSchema = z.object({
+  context: z.string(),
+  angelPosition: z.string(),
+  devilPosition: z.string(),
+  winner: WinnerSchema,
+});
+export type ContinuityPrior = z.infer<typeof ContinuityPriorSchema>;
+
+export const ContinuitySchema = z.object({
+  hasPrior: z.boolean(),
+  prior: ContinuityPriorSchema.nullable(),
+  angelCallback: z.string(),
+  devilCallback: z.string(),
+});
+export type Continuity = z.infer<typeof ContinuitySchema>;
+
 export const ConflictEngineOutputSchema = z.object({
   angel: SidePositionSchema,
   devil: SidePositionSchema,
@@ -113,6 +129,8 @@ export const ConflictEngineOutputSchema = z.object({
   likelyWinner: WinnerSchema,
   isRoleReversal: z.boolean(),
   absurdityLevel: z.number().min(0).max(1),
+  /** Callbacks derived from the previous conflict in this session, if any. */
+  continuity: ContinuitySchema,
 });
 export type ConflictEngineOutput = z.infer<typeof ConflictEngineOutputSchema>;
 

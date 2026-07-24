@@ -1,4 +1,5 @@
 import type { ConflictEngineOutput } from "../types/index.js";
+import type { ContinuityHooks } from "./continuityEngine.js";
 
 /**
  * Builds the `performance_instructions` string for a full conflict
@@ -7,7 +8,8 @@ import type { ConflictEngineOutput } from "../types/index.js";
  * summarizing the JSON at the user.
  */
 export function buildConflictPerformanceInstructions(
-  output: ConflictEngineOutput
+  output: ConflictEngineOutput,
+  continuity?: Pick<ContinuityHooks, "hasPrior" | "performanceNote">
 ): string {
   const { isRoleReversal, absurdityLevel } = output;
 
@@ -28,6 +30,10 @@ export function buildConflictPerformanceInstructions(
     lines.push(
       "IMPORTANT: this conflict is a role reversal — Angel is arguing the reckless position and Devil is arguing caution. Both characters should visibly notice this is unusual and comment on how weird it feels before diving into their (swapped) arguments."
     );
+  }
+
+  if (continuity?.hasPrior && continuity.performanceNote) {
+    lines.push(continuity.performanceNote);
   }
 
   lines.push(

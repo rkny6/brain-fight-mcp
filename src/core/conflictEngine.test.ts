@@ -103,4 +103,42 @@ describe("conflictEngine.runConflict", () => {
 
     expect(output.isRoleReversal).toBe(false);
   });
+
+  it("injects prior-round continuity into both sides' reasoning", () => {
+    const prior = {
+      id: "00000000-0000-4000-8000-000000000099",
+      sessionId: "test",
+      context: "Should I quit my job?",
+      angelPosition: "Don't quit yet — line something up first.",
+      devilPosition: "Quit. Today. Send the email.",
+      winner: "devil" as const,
+      absurdityLevel: 0.6,
+      createdAt: Date.now(),
+    };
+
+    const output = runConflict({
+      context: "If I'm not panicking anymore, can I leave?",
+      intensity: "medium",
+      relationship: makeRelationship(),
+      priorConflicts: [prior],
+    });
+
+    expect(output.continuity.hasPrior).toBe(true);
+    expect(output.continuity.prior?.winner).toBe("devil");
+    expect(output.angel.reasoning).toContain(prior.angelPosition);
+    expect(output.devil.reasoning).toContain(prior.angelPosition);
+    expect(output.devil.reasoning).toContain(prior.devilPosition);
+  });
+
+  it("leaves continuity empty on the first conflict of a session", () => {
+    const output = runConflict({
+      context: "buy a new laptop",
+      intensity: "low",
+      relationship: makeRelationship(),
+    });
+
+    expect(output.continuity.hasPrior).toBe(false);
+    expect(output.continuity.prior).toBeNull();
+  });
 });
+

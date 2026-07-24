@@ -1,6 +1,7 @@
 import {
   INTENSITY_VALUE,
   type ConflictEngineOutput,
+  type ConflictRecord,
   type Intensity,
   type RelationshipState,
   type SidePosition,
@@ -9,6 +10,11 @@ import {
 import { findTopicTemplate, type TopicTemplate } from "../prompts/conflict.js";
 import { ANGEL_CLOSERS, ANGEL_OPENERS } from "../prompts/angel.js";
 import { DEVIL_CLOSERS, DEVIL_OPENERS } from "../prompts/devil.js";
+import {
+  applyCallbackToReasoning,
+  buildContinuityHooks,
+  type ContinuityHooks,
+} from "./continuityEngine.js";
 
 /** Threshold above which high cooperation makes a role reversal possible. */
 const ROLE_REVERSAL_COOPERATION_THRESHOLD = 0.7;
@@ -66,12 +72,14 @@ interface BuildSideOptions {
   side: "angel" | "devil";
   intensityValue: number;
   relationship: RelationshipState;
+  continuity: ContinuityHooks;
 }
 
 function buildAngelSide({
   template,
   intensityValue,
   relationship,
+  continuity,
 }: BuildSideOptions): SidePosition {
   let { position, reasoning, concern } = template.angel;
 
@@ -80,6 +88,8 @@ function buildAngelSide({
     reasoning +=
       " That said, I'm not trying to control you — I just want it said out loud before you decide.";
   }
+
+  reasoning = applyCallbackToReasoning(reasoning, continuity.angelCallback);
 
   return {
     position: intensifyPosition(position, intensityValue),
@@ -92,6 +102,7 @@ function buildDevilSide({
   template,
   intensityValue,
   relationship,
+  continuity,
 }: BuildSideOptions): SidePosition {
   let { position, reasoning, temptation } = template.devil;
 
@@ -102,6 +113,8 @@ function buildDevilSide({
     reasoning =
       "Honestly, at this point I'd argue for the opposite of anything Angel says on principle. It's not even about this topic anymore.";
   }
+
+  reasoning = applyCallbackToReasoning(reasoning, continuity.devilCallback);
 
   return {
     position: intensifyPosition(position, intensityValue),
@@ -145,6 +158,8 @@ export interface RunConflictParams {
   topic?: string;
   intensity: Intensity;
   relationship: RelationshipState;
+  /** Newest-first prior conflicts for this session (from recall). */
+  priorConflicts?: ConflictRecord[];
 }
 
 /**
@@ -152,16 +167,19 @@ export interface RunConflictParams {
  * 1. Selects a topic template via keyword match (or generic fallback).
  * 2. Possibly triggers a role reversal (Enhancement 3).
  * 3. Builds Angel/Devil positions with intensity scaling + relationship bias (Enhancement 2).
+ * 4. Injects continuity callbacks from the previous conflict (memory injection).
  */
 export function runConflict({
   context,
   topic,
   intensity,
   relationship,
+  priorConflicts = [],
 }: RunConflictParams): ConflictEngineOutput {
   const intensityValue = INTENSITY_VALUE[intensity];
   const searchText = [context, topic].filter(Boolean).join(" ");
   const template = findTopicTemplate(searchText);
+  const continuityHooks = buildContinuityHooks(priorConflicts);
 
   // --- Role Reversal (Enhancement 3) ---
   let isRoleReversal = false;
@@ -195,6 +213,7 @@ export function runConflict({
     side: "angel",
     intensityValue,
     relationship,
+    continuity: continuityHooks,
   });
 
   const devil = buildDevilSide({
@@ -202,6 +221,7 @@ export function runConflict({
     side: "devil",
     intensityValue,
     relationship,
+    continuity: continuityHooks,
   });
 
   const likelyWinner = determineLikelyWinner(relationship, isRoleReversal);
@@ -213,6 +233,12 @@ export function runConflict({
     likelyWinner,
     isRoleReversal,
     absurdityLevel: intensityValue,
+    continuity: {
+      hasPrior: continuityHooks.hasPrior,
+      prior: continuityHooks.prior,
+      angelCallback: continuityHooks.angelCallback,
+      devilCallback: continuityHooks.devilCallback,
+    },
   };
 }
 

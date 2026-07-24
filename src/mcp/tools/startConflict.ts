@@ -4,6 +4,7 @@ import { IntensitySchema, StartConflictInputSchema } from "../../types/index.js"
 import { runConflict } from "../../core/conflictEngine.js";
 import { applyConflictResult } from "../../core/relationshipEngine.js";
 import { remember, recall } from "../../core/memoryEngine.js";
+import { buildContinuityHooks } from "../../core/continuityEngine.js";
 import {
   getOrCreateRelationship,
 } from "../../db/repositories/relationshipRepository.js";
@@ -22,18 +23,22 @@ const InputShape = {
 export function registerStartConflictTool(server: McpServer): void {
   server.tool(
     "start_inner_conflict",
-    "Stages a full Angel vs Devil debate over a situation, updates their evolving relationship, and returns performance instructions for the Client LLM to act it out.",
+    "Stages a full Angel vs Devil debate over a situation, updates their evolving relationship, injects prior-round continuity when the session has history, and returns performance instructions for the Client LLM to act it out.",
     InputShape,
     async (rawInput) => {
       const input = StartConflictInputSchema.parse(rawInput);
 
       const relationshipBefore = getOrCreateRelationship(input.sessionId);
+      // Recall BEFORE writing this conflict so continuity hooks point at last round.
+      const priors = recall(input.sessionId, 3);
+      const continuityHooks = buildContinuityHooks(priors);
 
       const conflictOutput = runConflict({
         context: input.context,
         topic: input.topic,
         intensity: input.intensity,
         relationship: relationshipBefore,
+        priorConflicts: priors,
       });
 
       const savedConflict = remember({
@@ -66,9 +71,13 @@ export function registerStartConflictTool(server: McpServer): void {
           isRoleReversal: conflictOutput.isRoleReversal,
           absurdityLevel: conflictOutput.absurdityLevel,
         },
+        continuity: conflictOutput.continuity,
         relationship: relationshipAfter,
         recent_memory: recentMemory,
-        performance_instructions: buildConflictPerformanceInstructions(conflictOutput),
+        performance_instructions: buildConflictPerformanceInstructions(
+          conflictOutput,
+          continuityHooks
+        ),
       };
 
       return {

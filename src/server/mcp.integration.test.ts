@@ -134,6 +134,7 @@ describe("MCP server (integration)", () => {
         isRoleReversal: boolean;
         absurdityLevel: number;
       };
+      continuity: { hasPrior: boolean };
       relationship: {
         sessionId: string;
         totalConflicts: number;
@@ -152,6 +153,8 @@ describe("MCP server (integration)", () => {
     expect(conflict.relationship.totalConflicts).toBe(1);
     expect(conflict.recent_memory).toHaveLength(1);
     expect(conflict.performance_instructions).toMatch(/debate|Angel|Devil/i);
+    expect(conflict.continuity.hasPrior).toBe(false);
+
 
     const relResult = await client.callTool({
       name: "get_relationship",
@@ -235,7 +238,57 @@ describe("MCP server (integration)", () => {
     expect(afterBody.recent_memory).toHaveLength(0);
   });
 
+  it("injects continuity from the previous conflict on round two", async () => {
+    const sessionId = "continuity-arc";
+
+    const round1 = await client.callTool({
+      name: "start_inner_conflict",
+      arguments: {
+        context: "I'm thinking about whether I should quit my job",
+        intensity: "medium",
+        sessionId,
+      },
+    });
+    const first = parseToolJson<{
+      angel: { position: string };
+      conflict: { likelyWinner: string | null };
+      continuity: { hasPrior: boolean };
+    }>(round1 as { content: Array<{ type: string; text?: string }> });
+
+    expect(first.continuity.hasPrior).toBe(false);
+
+    const round2 = await client.callTool({
+      name: "start_inner_conflict",
+      arguments: {
+        context: "If I'm not panicking anymore, can I leave now?",
+        intensity: "high",
+        sessionId,
+      },
+    });
+    const second = parseToolJson<{
+      angel: { reasoning: string };
+      devil: { reasoning: string };
+      continuity: {
+        hasPrior: boolean;
+        prior: { angelPosition: string; winner: string | null } | null;
+      };
+      performance_instructions: string;
+      relationship: { totalConflicts: number };
+      recent_memory: unknown[];
+    }>(round2 as { content: Array<{ type: string; text?: string }> });
+
+    expect(second.continuity.hasPrior).toBe(true);
+    expect(second.continuity.prior?.angelPosition).toBe(first.angel.position);
+    expect(second.angel.reasoning).toContain(first.angel.position);
+    expect(second.devil.reasoning).toContain(first.angel.position);
+    expect(second.performance_instructions).toContain("CONTINUITY");
+    expect(second.performance_instructions).toContain(first.angel.position);
+    expect(second.relationship.totalConflicts).toBe(2);
+    expect(second.recent_memory).toHaveLength(2);
+  });
+
   it("keeps relationship state isolated between sessions", async () => {
+
     await client.callTool({
       name: "start_inner_conflict",
       arguments: {

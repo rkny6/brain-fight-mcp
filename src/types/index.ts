@@ -95,6 +95,35 @@ export type TopicDomain = z.infer<typeof TopicDomainSchema>;
 export const DEFAULT_TOPIC_DOMAIN: TopicDomain = "general";
 
 /** ---------------------------------------------------------------------
+ * Relationship Milestones — rare, one-time narrative beats fired when a
+ * (session, domain) bucket first crosses a meaningful threshold. Each key
+ * fires AT MOST ONCE ever per bucket — this is what real ongoing history
+ * makes possible that a stateless debate tool structurally can't do.
+ * ------------------------------------------------------------------- */
+
+export const MilestoneKeySchema = z.enum([
+  "high_cooperation",
+  "devil_streak_5",
+  "angel_streak_5",
+  "conflicts_10",
+]);
+export type MilestoneKey = z.infer<typeof MilestoneKeySchema>;
+
+export interface MilestoneHit {
+  key: MilestoneKey;
+  /** Short, factual note for the calling LLM — not dialogue, just what happened. */
+  note: string;
+}
+
+export const RelationshipMilestoneSchema = z.object({
+  sessionId: z.string(),
+  domain: TopicDomainSchema,
+  key: MilestoneKeySchema,
+  reachedAt: z.number().int(),
+});
+export type RelationshipMilestone = z.infer<typeof RelationshipMilestoneSchema>;
+
+/** ---------------------------------------------------------------------
  * Relationship State
  * ------------------------------------------------------------------- */
 

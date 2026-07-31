@@ -12,6 +12,7 @@ import {
   saveActiveConflict,
   updateDebateTurnUtterance,
 } from "../../db/repositories/activeConflictRepository.js";
+import { recallOutcomes, buildTrackRecord } from "../../core/memoryEngine.js";
 import { buildTurnPerformanceInstructions } from "../../core/performanceInstructions.js";
 import {
   pickNextSpeaker,
@@ -198,6 +199,9 @@ export function registerContinueConflictTurnTool(server: McpServer): void {
           relationship,
           userInterjection: input.userInterjection,
           lastUtterance: input.lastUtterance,
+          trackRecord: buildTrackRecord(
+            recallOutcomes(input.sessionId, 20, active.domain),
+          ),
         }),
         how_to_continue: atCap
           ? "Max turns reached after this line. Perform ONLY this speaker, then call end_inner_conflict."

@@ -147,6 +147,22 @@ CREATE INDEX IF NOT EXISTS idx_decision_outcomes_session_domain
   ON decision_outcomes (session_id, domain, recorded_at DESC);
 `;
 
+/**
+ * Rare narrative beats — "first time cooperation crossed 0.9", "Devil has
+ * won 5 in a row" — fired at most once per (session, domain, milestone).
+ * This table is purely a dedupe ledger: it exists so a threshold that
+ * stays crossed doesn't retrigger the callout every single debate.
+ */
+export const CREATE_RELATIONSHIP_MILESTONES_TABLE = `
+CREATE TABLE IF NOT EXISTS relationship_milestones (
+  session_id TEXT NOT NULL,
+  domain TEXT NOT NULL,
+  milestone_key TEXT NOT NULL,
+  reached_at INTEGER NOT NULL,
+  PRIMARY KEY (session_id, domain, milestone_key)
+);
+`;
+
 export const ALL_SCHEMA_STATEMENTS = [
   CREATE_RELATIONSHIP_STATE_TABLE,
   CREATE_CONFLICTS_TABLE,
@@ -159,4 +175,5 @@ export const ALL_SCHEMA_STATEMENTS = [
   CREATE_DECISION_OUTCOMES_TABLE,
   CREATE_DECISION_OUTCOMES_SESSION_INDEX,
   CREATE_DECISION_OUTCOMES_SESSION_DOMAIN_INDEX,
+  CREATE_RELATIONSHIP_MILESTONES_TABLE,
 ];

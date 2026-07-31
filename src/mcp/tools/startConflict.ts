@@ -10,7 +10,7 @@ import {
   type TopicDomain,
 } from "../../types/index.js";
 import { runConflict } from "../../core/conflictEngine.js";
-import { recall } from "../../core/memoryEngine.js";
+import { recall, recallOutcomes, buildTrackRecord } from "../../core/memoryEngine.js";
 import { getOrCreateRelationship } from "../../db/repositories/relationshipRepository.js";
 import { buildTurnPerformanceInstructions } from "../../core/performanceInstructions.js";
 import {
@@ -177,6 +177,7 @@ async function runStartDebate(input: DebateArgs) {
       maxTurns,
       isDoubleTap,
       relationship: relationshipBefore,
+      trackRecord: buildTrackRecord(recallOutcomes(input.sessionId, 20, input.domain)),
     }),
     how_to_continue:
       "Perform ONLY this speaker's line, then call continue_conflict_turn (optionally with lastUtterance / userInterjection / speaker override). When ready, call end_inner_conflict WITH an explicit winner based on which side actually argued better in this exchange — the tool's default winner is a pre-debate random draw, not a judgment of the dialogue.",

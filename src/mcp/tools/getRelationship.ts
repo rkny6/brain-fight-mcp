@@ -10,6 +10,7 @@ import {
   getOrCreateRelationship,
 } from "../../db/repositories/relationshipRepository.js";
 import { recall, recallOutcomes, buildTrackRecord } from "../../core/memoryEngine.js";
+import { getAllMilestones } from "../../db/repositories/milestoneRepository.js";
 
 const InputShape = {
   sessionId: z.string().default("default").describe("Session/project identifier for state isolation."),
@@ -46,15 +47,18 @@ export function registerGetRelationshipTool(server: McpServer): void {
             recentWinner: r.recentWinner,
           }));
 
+      const milestones = getAllMilestones(input.sessionId, input.domain);
+
       const result = {
         domain,
         relationship,
         recent_memory: recentMemory,
         recent_outcomes: recentOutcomes,
         track_record: trackRecord,
+        milestones_reached: milestones,
         all_domains_summary: allDomainsSummary,
         performance_instructions:
-          "If the user is asking about the relationship out of curiosity, describe it in-character — Angel and Devil can briefly comment on their own dynamic (e.g. grudging respect, simmering annoyance, surprising cooperation) rather than reading out raw numbers. If track_record has recorded outcomes, you may casually reference the pattern (e.g. 'the last few times you sided with Devil on spending, it went well twice and stung once') — only if it's actually relevant to what the user asked, not as a forced callback. If all_domains_summary is present and the user's question is genuinely about their overall patterns (not one specific domain), you may mention how domains differ (e.g. 'we argue a lot about money, barely ever about health').",
+          "If the user is asking about the relationship out of curiosity, describe it in-character — Angel and Devil can briefly comment on their own dynamic (e.g. grudging respect, simmering annoyance, surprising cooperation) rather than reading out raw numbers. If track_record has recorded outcomes, you may casually reference the pattern (e.g. 'the last few times you sided with Devil on spending, it went well twice and stung once') — only if it's actually relevant to what the user asked, not as a forced callback. If all_domains_summary is present and the user's question is genuinely about their overall patterns (not one specific domain), you may mention how domains differ (e.g. 'we argue a lot about money, barely ever about health'). If milestones_reached is non-empty and the user is asking out of genuine curiosity, you may mention one or two as flavor — but these were already announced in-character when they first happened, so don't re-stage them as new news here.",
       };
 
       return {

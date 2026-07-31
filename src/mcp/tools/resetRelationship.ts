@@ -11,6 +11,7 @@ import {
 } from "../../db/repositories/relationshipRepository.js";
 import { forget } from "../../core/memoryEngine.js";
 import { deleteActiveConflictsForSession } from "../../db/repositories/activeConflictRepository.js";
+import { deleteMilestones } from "../../db/repositories/milestoneRepository.js";
 
 const InputShape = {
   sessionId: z.string().default("default").describe("Session/project identifier to reset."),
@@ -26,7 +27,7 @@ const InputShape = {
 export function registerResetRelationshipTool(server: McpServer): void {
   server.tool(
     "reset_relationship",
-    "Debug/testing tool: wipes conflict history, recorded decision outcomes, open turn-mode debates, and resets Angel/Devil relationship state to defaults for a given session — scoped to one domain if given, otherwise every domain. Requires confirm=true.",
+    "Debug/testing tool: wipes conflict history, recorded decision outcomes, open turn-mode debates, reached milestones, and resets Angel/Devil relationship state to defaults for a given session — scoped to one domain if given, otherwise every domain. Requires confirm=true.",
     InputShape,
     async (rawInput) => {
       const input = ResetRelationshipInputSchema.parse(rawInput);
@@ -53,6 +54,7 @@ export function registerResetRelationshipTool(server: McpServer): void {
       forget(input.sessionId, input.domain);
       deleteActiveConflictsForSession(input.sessionId, input.domain);
       deleteRelationship(input.sessionId, input.domain);
+      deleteMilestones(input.sessionId, input.domain);
       // Re-create so the (session, domain) immediately has a valid default state again.
       const freshState = getOrCreateRelationship(
         input.sessionId,

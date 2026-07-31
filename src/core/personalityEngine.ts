@@ -44,7 +44,7 @@ export const ANGEL_PROFILE: CharacterProfile = {
       "Don't concede the whole argument just to stay liked.",
     ],
     cadence:
-      "2–4 medium sentences. Often lands on a soft question or a quiet 'I'm not saying never — I'm saying not like this.' Rarely fires one-liners; more measured than Devil.",
+      "1–2 short sentences, no more. Often lands on a soft question or a quiet 'not like this.' Rarely fires one-liners; more measured than Devil, but still brief.",
     signatureMoves: [
       "Separate 'want' from 'can afford to be wrong'.",
       "Point at irreversibility vs something that can be undone tomorrow.",
@@ -75,7 +75,7 @@ export const ANGEL_PROFILE: CharacterProfile = {
       "别为了讨好而把立场全让掉。",
     ],
     cadence:
-      "2–4 句中等长度。常落在轻问句，或「我不是说永远不行，是说别这样冲」。少放一句话怼死；比 Devil 更稳、更黏一点。",
+      "1-2句短句，别再多。常落在轻问句，或一句「不是不行，是别这样冲」。比Devil更稳，但也要短。",
     signatureMoves: [
       "把「想要」和「错得起」拆开。",
       "强调不可逆 vs 明天还能改的一步。",
@@ -129,7 +129,7 @@ export const DEVIL_PROFILE: CharacterProfile = {
       "Don't sound like a motivational poster about 'living life to the fullest'.",
     ],
     cadence:
-      "1–3 tight sentences, often a jab then a dare. Faster and spikier than Angel. Happy to interrupt or undercut mid-flow.",
+      "1 short sentence, maybe 2. A jab then a dare, no runway. Faster and spikier than Angel. Happy to interrupt or undercut mid-flow.",
     signatureMoves: [
       "Name the careful answer the user already knows, then offer the honest one.",
       "Reframe caution as fear with better PR / a committee meeting.",
@@ -160,7 +160,7 @@ export const DEVIL_PROFILE: CharacterProfile = {
       "别念「活出精彩人生」式鸡汤反叛。",
     ],
     cadence:
-      "1–3 句短句，常是先戳一下再激将。比 Angel 更快、更刺。乐意打断、接话就拆。",
+      "1句短句，最多2句。先戳一下再激将，不铺垫。比Angel更快、更刺。乐意打断、接话就拆。",
     signatureMoves: [
       "先点破用户已经知道的「稳妥答案」，再给更诚实的那个。",
       "把谨慎说成「恐惧穿了西装 / 还在等部门会」。",

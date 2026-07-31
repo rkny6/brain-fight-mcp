@@ -15,7 +15,7 @@ const InputShape = {
 export function registerClearDatabaseTool(server: McpServer): void {
   server.tool(
     "clear_database",
-    "Debug/testing tool: wipes ALL sessions from the local SQLite store (relationship_state, conflicts, active_conflicts, debate_turns, decision_outcomes). Requires confirm=true. Prefer reset_relationship when you only need one sessionId.",
+    "Debug/testing tool: wipes ALL sessions from the local SQLite store (relationship_state, conflicts, active_conflicts, debate_turns, decision_outcomes, relationship_milestones). Requires confirm=true. Prefer reset_relationship when you only need one sessionId.",
     InputShape,
     async (rawInput) => {
       const input = ClearDatabaseInputSchema.parse(rawInput);

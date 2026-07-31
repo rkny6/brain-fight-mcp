@@ -6,6 +6,11 @@ import {
 } from "../../types/index.js";
 import { applyConflictResult } from "../../core/relationshipEngine.js";
 import { remember, recall, recallOutcomes, buildTrackRecord } from "../../core/memoryEngine.js";
+import { detectNewMilestones } from "../../core/milestoneEngine.js";
+import {
+  getReachedMilestoneKeys,
+  recordMilestone,
+} from "../../db/repositories/milestoneRepository.js";
 import {
   getOrCreateRelationship,
   saveRelationship,
@@ -142,6 +147,24 @@ export function registerEndConflictTool(server: McpServer): void {
       const turns = listDebateTurns(active.id);
       const recentMemory = recall(input.sessionId, 3, active.domain);
 
+      // Milestone detection needs enough history for streak checks — fetch
+      // separately from the display-only recentMemory above. remember()
+      // already inserted this round, so it's included as the newest entry.
+      const recentForMilestones = recall(input.sessionId, 5, active.domain);
+      const alreadyReachedMilestones = getReachedMilestoneKeys(
+        input.sessionId,
+        active.domain,
+      );
+      const newMilestones = detectNewMilestones({
+        before: relationshipBefore,
+        after: relationshipAfter,
+        recentConflicts: recentForMilestones,
+        alreadyReached: alreadyReachedMilestones,
+      });
+      for (const hit of newMilestones) {
+        recordMilestone(input.sessionId, active.domain, hit.key);
+      }
+
       const result = {
         mode: "turn" as const,
         ok: true,
@@ -164,11 +187,13 @@ export function registerEndConflictTool(server: McpServer): void {
         relationship: relationshipAfter,
         recent_memory: recentMemory,
         turns,
+        milestones_reached: newMilestones.map((m) => m.key),
         performance_instructions: buildEndConflictPerformanceInstructions({
           conflict: closed,
           winner,
           relationship: relationshipAfter,
           trackRecord: buildTrackRecord(recallOutcomes(input.sessionId, 20, active.domain)),
+          milestones: newMilestones,
         }),
       };
 

@@ -3,6 +3,7 @@ import type {
   CharacterProfile,
   DebateBrief,
   Intensity,
+  MilestoneHit,
   RelationshipState,
   SidePosition,
   Speaker,
@@ -10,6 +11,42 @@ import type {
 } from "../types/index.js";
 import { ANGEL_PROFILE, DEVIL_PROFILE } from "./personalityEngine.js";
 import { isChineseText } from "../prompts/conflict.js";
+
+/** Turns a raw day count into an honest recency phrase for instruction text — never let an old memory sound fresh. */
+function phraseRecency(ageDays: number): string {
+  if (ageDays <= 3) return "just now / very recently";
+  if (ageDays <= 14) return "recently";
+  if (ageDays <= 45) return "a few weeks back";
+  if (ageDays <= 120) return "a while back";
+  return "a long time ago";
+}
+
+/** Real-world track record from recorded outcomes, if any exist yet for this domain. */
+export interface MemorableOutcome {
+  note: string;
+  sentiment?: "good" | "regret" | "mixed" | "too_early";
+  recordedAt: number;
+  /** How many days ago this was recorded — use to phrase "last time" vs "a while back" honestly. */
+  ageDays: number;
+}
+
+export interface TrackRecordSummary {
+  totalRecorded: number;
+  angelChoiceCount: number;
+  devilChoiceCount: number;
+  angelChoiceGoodCount: number;
+  angelChoiceRegretCount: number;
+  devilChoiceGoodCount: number;
+  devilChoiceRegretCount: number;
+  /** Recency-weighted tallies — old outcomes fade toward (not to) zero, recent ones dominate. Prefer these over the raw counts above when judging "how this currently feels." */
+  angelWeightedGood: number;
+  angelWeightedRegret: number;
+  devilWeightedGood: number;
+  devilWeightedRegret: number;
+  /** A specific past outcome the user actually wrote a note about, if one exists for this side. */
+  angelMemorableOutcome?: MemorableOutcome;
+  devilMemorableOutcome?: MemorableOutcome;
+}
 
 export interface TurnPerformanceContext {
   conflict: ActiveConflict;
@@ -22,6 +59,8 @@ export interface TurnPerformanceContext {
   lastUtterance?: string;
   angelProfile?: CharacterProfile;
   devilProfile?: CharacterProfile;
+  /** Optional track record — lets Angel/Devil reference real history mid-debate, not just at closing. */
+  trackRecord?: TrackRecordSummary;
 }
 
 /** Shared anti-template rules for Client LLM performance. */
@@ -44,15 +83,9 @@ export interface EndConflictPerformanceContext {
     | "draw";
   relationship: RelationshipState;
   /** Optional real-world track record from recorded outcomes, if any exist yet. */
-  trackRecord?: {
-    totalRecorded: number;
-    angelChoiceCount: number;
-    devilChoiceCount: number;
-    angelChoiceGoodCount: number;
-    angelChoiceRegretCount: number;
-    devilChoiceGoodCount: number;
-    devilChoiceRegretCount: number;
-  };
+  trackRecord?: TrackRecordSummary;
+  /** Rare narrative beats newly crossed by THIS round's result, if any. */
+  milestones?: MilestoneHit[];
 }
 
 /** Resolve which Voice Card to use for performance (zh when available). */
@@ -313,6 +346,7 @@ export function buildTurnPerformanceInstructions(
     lastUtterance,
     angelProfile = ANGEL_PROFILE,
     devilProfile = DEVIL_PROFILE,
+    trackRecord,
   } = ctx;
 
   const profile = speaker === "angel" ? angelProfile : devilProfile;
@@ -352,6 +386,23 @@ export function buildTurnPerformanceInstructions(
     "RELATIONSHIP TONE for this speaker (modulate delivery — do NOT read meters aloud):",
     ...beats.map((b) => `  ${b}`),
   );
+
+  if (trackRecord && trackRecord.totalRecorded > 0) {
+    const forThisSpeaker =
+      speaker === "devil"
+        ? `Devil went ${trackRecord.devilChoiceGoodCount}-${trackRecord.devilChoiceRegretCount} (good-regret) all-time when the user actually followed Devil's push. Recency-weighted (recent outcomes count more, old ones fade toward but never to zero), that's ${trackRecord.devilWeightedGood}-${trackRecord.devilWeightedRegret} — prefer this weighted read over the all-time one for how it currently feels.`
+        : `Angel went ${trackRecord.angelChoiceGoodCount}-${trackRecord.angelChoiceRegretCount} (good-regret) all-time when the user actually followed Angel's advice. Recency-weighted (recent outcomes count more, old ones fade toward but never to zero), that's ${trackRecord.angelWeightedGood}-${trackRecord.angelWeightedRegret} — prefer this weighted read over the all-time one for how it currently feels.`;
+    const memorable =
+      speaker === "devil"
+        ? trackRecord.devilMemorableOutcome
+        : trackRecord.angelMemorableOutcome;
+    const memorableLine = memorable
+      ? ` SPECIFIC MEMORY (stronger ammo than the aggregate — use this INSTEAD of the raw counts if you use anything at all): ${phraseRecency(memorable.ageDays)} (${memorable.ageDays}d ago), the user told you, in their own words, "${memorable.note}"${memorable.sentiment ? ` (outcome: ${memorable.sentiment})` : ""}. Phrase it honestly for how long ago it was — don't say "last time" for something months old. Reference the GIST of this like an actual memory, in your own words — do not quote it verbatim like you're reading a file, and do not announce that you're "recalling a record."`
+      : "";
+    lines.push(
+      `REAL TRACK RECORD (optional ammo, not a mandate): across ${trackRecord.totalRecorded} recorded real-world outcomes in this domain, ${forThisSpeaker}${memorableLine} You may land ONE line taunting/vindicating/owning this ONLY if it lands naturally for this exact situation — most turns should NOT mention it. Never read the raw numbers aloud; reference it the way a person would ("last time you didn't listen to me and—"), not like a stat sheet.`,
+    );
+  }
 
   lines.push(...formatConstraintAxes(resolved, speaker));
 
@@ -414,7 +465,7 @@ export function buildTurnPerformanceInstructions(
   }
 
   lines.push(
-    "LENGTH: 1 short monologue or 2–4 tight sentences. Clear speaker label once (e.g. Devil 😈: ...).",
+    "LENGTH: HARD CAP 1–2 short sentences. No monologues, no 3+ sentence speeches. If you have more to say, save it for the next turn — say less, more often. Clear speaker label once (e.g. Devil 😈: ...).",
     "RULES: Stay in voice. Comedy > accuracy when they conflict. No preachy moral lecture. No safety-disclaimer-as-dialogue. Answer this user's details, not a stock dilemma.",
     "STOP after your line. Do not continue as the other speaker. Do not call tools unless the user asks to continue/end.",
   );
@@ -426,17 +477,32 @@ export function buildTurnPerformanceInstructions(
 export function buildEndConflictPerformanceInstructions(
   ctx: EndConflictPerformanceContext,
 ): string {
-  const { conflict, winner, relationship, trackRecord } = ctx;
+  const { conflict, winner, relationship, trackRecord, milestones } = ctx;
   const locale = detectPerformanceLocale(conflict.context, conflict.topic);
+  const winnerMemorable =
+    winner === "devil"
+      ? trackRecord?.devilMemorableOutcome
+      : winner === "angel"
+        ? trackRecord?.angelMemorableOutcome
+        : undefined;
   const trackRecordLine =
     trackRecord && trackRecord.totalRecorded > 0
-      ? `Real-world track record so far (only mention if genuinely relevant, don't force it): of ${trackRecord.totalRecorded} recorded outcomes, Angel-leaning choices went well ${trackRecord.angelChoiceGoodCount}x and to regret ${trackRecord.angelChoiceRegretCount}x; Devil-leaning choices went well ${trackRecord.devilChoiceGoodCount}x and to regret ${trackRecord.devilChoiceRegretCount}x.`
+      ? `Real-world track record so far (only mention if genuinely relevant, don't force it): all-time, Angel-leaning choices went well ${trackRecord.angelChoiceGoodCount}x and to regret ${trackRecord.angelChoiceRegretCount}x; Devil-leaning choices went well ${trackRecord.devilChoiceGoodCount}x and to regret ${trackRecord.devilChoiceRegretCount}x (of ${trackRecord.totalRecorded} recorded outcomes total). Recency-weighted (recent outcomes count more, old ones fade toward but never to zero), that's Angel ${trackRecord.angelWeightedGood}-${trackRecord.angelWeightedRegret} and Devil ${trackRecord.devilWeightedGood}-${trackRecord.devilWeightedRegret} — prefer the weighted read over all-time counts for how this currently feels.${winnerMemorable ? ` If it fits, ground the next step in this specific past memory rather than the raw counts — ${phraseRecency(winnerMemorable.ageDays)} (${winnerMemorable.ageDays}d ago) the user said, in their own words, "${winnerMemorable.note}"${winnerMemorable.sentiment ? ` (outcome: ${winnerMemorable.sentiment})` : ""}. Paraphrase it as an actual memory with an honest sense of how long ago it was, don't quote it like a file and don't make it sound more recent than it was.` : ""}`
       : null;
+  const milestoneLines =
+    milestones && milestones.length > 0
+      ? [
+          "RARE MILESTONE (first time ever for this bucket — this is genuinely special, not routine flavor text):",
+          ...milestones.map((m) => `  - ${m.note}`),
+          "Before giving the actionable next step, let Angel and Devil each drop ONE brief, genuinely surprised in-character line noticing this (not a full scene, not breaking the fourth wall, not explaining what a 'milestone' is — just react like it actually just happened to them). This only happens because this bucket has real history; treat it as earned, not as a badge popup.",
+        ]
+      : [];
   return [
     "MODE: DEBATE CLOSED. Step OUT of character.",
     `The staged Angel vs Devil exchange about "${conflict.context}" is finished.`,
     `Recorded winner for relationship state: ${winner} (your judgment call if you passed one explicitly; the pre-debate default otherwise).`,
     `Relationship now: angelRespect=${relationship.angelRespect.toFixed(2)}, devilRespect=${relationship.devilRespect.toFixed(2)}, cooperation=${relationship.cooperation.toFixed(2)}, totalConflicts=${relationship.totalConflicts}.`,
+    ...milestoneLines,
     "Give the user ONE concrete, actionable next step grounded in the stronger reasoning from the debate — not a sermon, not raw JSON, not more Angel/Devil banter unless they ask to reopen.",
     ...(trackRecordLine ? [trackRecordLine] : []),
     "Later, if the user reports back what they actually did or how it went (even in passing), call record_decision_outcome so future rounds can reference a real track record.",

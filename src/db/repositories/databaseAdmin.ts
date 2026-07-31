@@ -6,6 +6,7 @@ export interface ClearAllStateResult {
   activeConflictsDeleted: number;
   debateTurnsDeleted: number;
   decisionOutcomesDeleted: number;
+  milestonesDeleted: number;
 }
 
 /**
@@ -22,12 +23,14 @@ export function clearAllState(): ClearAllStateResult {
     const decisionOutcomes = db.prepare("DELETE FROM decision_outcomes").run();
     const conflicts = db.prepare("DELETE FROM conflicts").run();
     const relationships = db.prepare("DELETE FROM relationship_state").run();
+    const milestones = db.prepare("DELETE FROM relationship_milestones").run();
     return {
       relationshipsDeleted: relationships.changes,
       conflictsDeleted: conflicts.changes,
       activeConflictsDeleted: activeConflicts.changes,
       debateTurnsDeleted: debateTurns.changes,
       decisionOutcomesDeleted: decisionOutcomes.changes,
+      milestonesDeleted: milestones.changes,
     };
   });
 
@@ -41,6 +44,7 @@ export function countStateRows(): {
   activeConflicts: number;
   debateTurns: number;
   decisionOutcomes: number;
+  milestones: number;
 } {
   const db = getDb();
   const relationships = db
@@ -58,11 +62,15 @@ export function countStateRows(): {
   const decisionOutcomes = db
     .prepare("SELECT COUNT(*) AS n FROM decision_outcomes")
     .get() as { n: number };
+  const milestones = db
+    .prepare("SELECT COUNT(*) AS n FROM relationship_milestones")
+    .get() as { n: number };
   return {
     relationships: relationships.n,
     conflicts: conflicts.n,
     activeConflicts: activeConflicts.n,
     debateTurns: debateTurns.n,
     decisionOutcomes: decisionOutcomes.n,
+    milestones: milestones.n,
   };
 }

@@ -101,6 +101,7 @@ async function runDebateToSettlement(
     relationship: { totalConflicts: number; recentWinner: string | null };
     conflict: { id: string };
     performance_instructions: string;
+    milestones_reached: string[];
   }>(endResult as { content: Array<{ type: string; text?: string }> });
 
   return { conflictId: opened.conflictId, ended };
@@ -410,6 +411,53 @@ describe("MCP server (integration)", () => {
     expect(forcedTurn.turn.speaker).toBe("angel");
     expect(forcedTurn.turn.isDoubleTap).toBe(true);
     expect(forcedTurn.performance_instructions).toMatch(/USER INTERJECTION|DOUBLE-TAP/i);
+  });
+
+  it("fires the conflicts_10 milestone exactly once, on the 10th completed debate in a domain", async () => {
+    const sessionId = "milestone-e2e";
+    const results: { totalConflicts: number; milestones: string[] }[] = [];
+
+    for (let i = 0; i < 11; i += 1) {
+      const { ended } = await runDebateToSettlement(client, {
+        context: `filler decision number ${i}`,
+        sessionId,
+        extraStartArgs: { domain: "career" },
+      });
+      results.push({
+        totalConflicts: ended.relationship.totalConflicts,
+        milestones: ended.milestones_reached,
+      });
+    }
+
+    // The 10th completed debate (index 9, totalConflicts becomes 10) fires it.
+    expect(results[8].totalConflicts).toBe(9);
+    expect(results[8].milestones).not.toContain("conflicts_10");
+    expect(results[9].totalConflicts).toBe(10);
+    expect(results[9].milestones).toContain("conflicts_10");
+    // The 11th must NOT re-fire it.
+    expect(results[10].totalConflicts).toBe(11);
+    expect(results[10].milestones).not.toContain("conflicts_10");
+
+    // get_relationship must also be able to see it was reached.
+    const relResult = await client.callTool({
+      name: "get_relationship",
+      arguments: { sessionId, domain: "career" },
+    });
+    const rel = parseToolJson<{
+      milestones_reached: Array<{ key: string; domain: string }>;
+    }>(relResult as { content: Array<{ type: string; text?: string }> });
+    expect(rel.milestones_reached.some((m) => m.key === "conflicts_10")).toBe(true);
+
+    // A different domain, same session, must NOT have this milestone —
+    // domain isolation applies to milestones too.
+    const otherDomainResult = await client.callTool({
+      name: "get_relationship",
+      arguments: { sessionId, domain: "money" },
+    });
+    const otherDomain = parseToolJson<{
+      milestones_reached: Array<{ key: string; domain: string }>;
+    }>(otherDomainResult as { content: Array<{ type: string; text?: string }> });
+    expect(otherDomain.milestones_reached).toHaveLength(0);
   });
 
   it("clear_database requires confirm and wipes all sessions", async () => {

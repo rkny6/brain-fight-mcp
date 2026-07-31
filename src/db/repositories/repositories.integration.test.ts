@@ -31,6 +31,12 @@ import { forget, recall, remember } from "../../core/memoryEngine.js";
 import { DEFAULT_RELATIONSHIP_STATE } from "../../types/index.js";
 import { applyConflictResult } from "../../core/relationshipEngine.js";
 import { saveOutcome } from "./outcomeRepository.js";
+import {
+  deleteMilestones,
+  getAllMilestones,
+  getReachedMilestoneKeys,
+  recordMilestone,
+} from "./milestoneRepository.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -369,6 +375,7 @@ describe("repositories + memory (integration)", () => {
       activeConflicts: 0,
       debateTurns: 0,
       decisionOutcomes: 0,
+      milestones: 0,
     });
 
     const summary = clearAllState();
@@ -377,12 +384,14 @@ describe("repositories + memory (integration)", () => {
     expect(summary.activeConflictsDeleted).toBe(0);
     expect(summary.debateTurnsDeleted).toBe(0);
     expect(summary.decisionOutcomesDeleted).toBe(0);
+    expect(summary.milestonesDeleted).toBe(0);
     expect(countStateRows()).toEqual({
       relationships: 0,
       conflicts: 0,
       activeConflicts: 0,
       debateTurns: 0,
       decisionOutcomes: 0,
+      milestones: 0,
     });
     expect(getRecentConflicts("clear-a")).toHaveLength(0);
     expect(getRecentConflicts("clear-b")).toHaveLength(0);
@@ -618,6 +627,55 @@ describe("repositories + memory (integration)", () => {
         if (prev === undefined) delete process.env.BRAIN_FIGHT_VACUUM;
         else process.env.BRAIN_FIGHT_VACUUM = prev;
       }
+    });
+  });
+
+  describe("milestoneRepository", () => {
+    it("recordMilestone is idempotent — calling it twice does not duplicate or throw", () => {
+      const sessionId = "milestone-idem";
+      recordMilestone(sessionId, "career", "conflicts_10");
+      expect(() => recordMilestone(sessionId, "career", "conflicts_10")).not.toThrow();
+
+      const keys = getReachedMilestoneKeys(sessionId, "career");
+      expect(keys.size).toBe(1);
+      expect(keys.has("conflicts_10")).toBe(true);
+
+      const all = getAllMilestones(sessionId, "career");
+      expect(all).toHaveLength(1);
+    });
+
+    it("scopes milestones to their domain — same key in two domains doesn't collide", () => {
+      const sessionId = "milestone-domain-scope";
+      recordMilestone(sessionId, "career", "high_cooperation");
+      recordMilestone(sessionId, "money", "high_cooperation");
+
+      expect(getReachedMilestoneKeys(sessionId, "career").has("high_cooperation")).toBe(true);
+      expect(getReachedMilestoneKeys(sessionId, "health").has("high_cooperation")).toBe(false);
+
+      // Omitting domain in getAllMilestones returns everything for the session.
+      const all = getAllMilestones(sessionId);
+      expect(all.map((m) => m.domain).sort()).toEqual(["career", "money"]);
+    });
+
+    it("deleteMilestones scoped to a domain leaves other domains' milestones intact", () => {
+      const sessionId = "milestone-scoped-delete";
+      recordMilestone(sessionId, "career", "conflicts_10");
+      recordMilestone(sessionId, "money", "devil_streak_5");
+
+      deleteMilestones(sessionId, "career");
+
+      expect(getReachedMilestoneKeys(sessionId, "career").size).toBe(0);
+      expect(getReachedMilestoneKeys(sessionId, "money").has("devil_streak_5")).toBe(true);
+    });
+
+    it("deleteMilestones without a domain wipes every domain for the session", () => {
+      const sessionId = "milestone-full-delete";
+      recordMilestone(sessionId, "career", "conflicts_10");
+      recordMilestone(sessionId, "money", "devil_streak_5");
+
+      deleteMilestones(sessionId);
+
+      expect(getAllMilestones(sessionId)).toHaveLength(0);
     });
   });
 });

@@ -701,7 +701,7 @@ npm publish --access public
 
 ---
 
-# Brain Fight MCP (v0.1) · 中文
+# Brain Fight MCP (v0.1) 中文
 
 [![CI](https://github.com/rkny6/brain-fight-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/rkny6/brain-fight-mcp/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/brain-fight-mcp.svg)](https://www.npmjs.com/package/brain-fight-mcp)

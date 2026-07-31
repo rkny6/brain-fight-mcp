@@ -5,7 +5,7 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts"],
     globals: false,
-    // SQLite singleton + ANGEL_DEVIL_DB_PATH must not race across files.
+    // SQLite singleton + BRAIN_FIGHT_DB_PATH must not race across files.
     fileParallelism: false,
   },
 });

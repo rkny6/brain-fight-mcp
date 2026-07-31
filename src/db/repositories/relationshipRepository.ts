@@ -1,12 +1,15 @@
 import { getDb } from "../database.js";
 import {
   DEFAULT_RELATIONSHIP_STATE,
+  DEFAULT_TOPIC_DOMAIN,
   type RelationshipState,
+  type TopicDomain,
   type Winner,
 } from "../../types/index.js";
 
 interface RelationshipRow {
   session_id: string;
+  domain: string;
   angel_respect: number;
   devil_respect: number;
   angel_annoyance: number;
@@ -19,6 +22,7 @@ interface RelationshipRow {
 function rowToState(row: RelationshipRow): RelationshipState {
   return {
     sessionId: row.session_id,
+    domain: row.domain as TopicDomain,
     angelRespect: row.angel_respect,
     devilRespect: row.devil_respect,
     angelAnnoyance: row.angel_annoyance,
@@ -29,15 +33,18 @@ function rowToState(row: RelationshipRow): RelationshipState {
   };
 }
 
-/** Fetches relationship state for a session, creating a default row if absent. */
-export function getOrCreateRelationship(sessionId: string): RelationshipState {
+/** Fetches relationship state for a (session, domain) bucket, creating a default row if absent. */
+export function getOrCreateRelationship(
+  sessionId: string,
+  domain: TopicDomain = DEFAULT_TOPIC_DOMAIN,
+): RelationshipState {
   const db = getDb();
 
   const existing = db
-    .prepare<[string], RelationshipRow>(
-      "SELECT * FROM relationship_state WHERE session_id = ?"
+    .prepare<[string, string], RelationshipRow>(
+      "SELECT * FROM relationship_state WHERE session_id = ? AND domain = ?"
     )
-    .get(sessionId);
+    .get(sessionId, domain);
 
   if (existing) {
     return rowToState(existing);
@@ -45,29 +52,30 @@ export function getOrCreateRelationship(sessionId: string): RelationshipState {
 
   db.prepare(
     `INSERT INTO relationship_state (
-       session_id, angel_respect, devil_respect,
+       session_id, domain, angel_respect, devil_respect,
        angel_annoyance, devil_annoyance, cooperation,
        recent_winner, total_conflicts
-     ) VALUES (@sessionId, @angelRespect, @devilRespect, @angelAnnoyance, @devilAnnoyance, @cooperation, @recentWinner, @totalConflicts)`
+     ) VALUES (@sessionId, @domain, @angelRespect, @devilRespect, @angelAnnoyance, @devilAnnoyance, @cooperation, @recentWinner, @totalConflicts)`
   ).run({
     sessionId,
+    domain,
     ...DEFAULT_RELATIONSHIP_STATE,
     recentWinner: DEFAULT_RELATIONSHIP_STATE.recentWinner,
   });
 
-  return { sessionId, ...DEFAULT_RELATIONSHIP_STATE };
+  return { sessionId, domain, ...DEFAULT_RELATIONSHIP_STATE };
 }
 
-/** Persists a full relationship state (upsert). */
+/** Persists a full relationship state for its (sessionId, domain) bucket (upsert). */
 export function saveRelationship(state: RelationshipState): void {
   const db = getDb();
   db.prepare(
     `INSERT INTO relationship_state (
-       session_id, angel_respect, devil_respect,
+       session_id, domain, angel_respect, devil_respect,
        angel_annoyance, devil_annoyance, cooperation,
        recent_winner, total_conflicts
-     ) VALUES (@sessionId, @angelRespect, @devilRespect, @angelAnnoyance, @devilAnnoyance, @cooperation, @recentWinner, @totalConflicts)
-     ON CONFLICT(session_id) DO UPDATE SET
+     ) VALUES (@sessionId, @domain, @angelRespect, @devilRespect, @angelAnnoyance, @devilAnnoyance, @cooperation, @recentWinner, @totalConflicts)
+     ON CONFLICT(session_id, domain) DO UPDATE SET
        angel_respect = excluded.angel_respect,
        devil_respect = excluded.devil_respect,
        angel_annoyance = excluded.angel_annoyance,
@@ -78,8 +86,32 @@ export function saveRelationship(state: RelationshipState): void {
   ).run(state);
 }
 
-/** Deletes the relationship row for a session (used by reset_relationship). */
-export function deleteRelationship(sessionId: string): void {
+/** Every domain bucket that has any state for this session, for cross-domain summaries. */
+export function getAllRelationshipsForSession(
+  sessionId: string,
+): RelationshipState[] {
   const db = getDb();
-  db.prepare("DELETE FROM relationship_state WHERE session_id = ?").run(sessionId);
+  const rows = db
+    .prepare<[string], RelationshipRow>(
+      "SELECT * FROM relationship_state WHERE session_id = ? ORDER BY total_conflicts DESC"
+    )
+    .all(sessionId);
+  return rows.map(rowToState);
+}
+
+/**
+ * Deletes relationship row(s) for a session (used by reset_relationship).
+ * Pass a domain to reset just that bucket; omit to wipe every domain for
+ * the session (matches the old pre-domain "reset everything" behavior).
+ */
+export function deleteRelationship(sessionId: string, domain?: TopicDomain): void {
+  const db = getDb();
+  if (domain) {
+    db.prepare("DELETE FROM relationship_state WHERE session_id = ? AND domain = ?").run(
+      sessionId,
+      domain,
+    );
+  } else {
+    db.prepare("DELETE FROM relationship_state WHERE session_id = ?").run(sessionId);
+  }
 }

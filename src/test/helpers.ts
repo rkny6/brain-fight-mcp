@@ -9,9 +9,9 @@ import { closeDb, getDb } from "../db/database.js";
  */
 export function setupIsolatedDb(): string {
   closeDb();
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "angel-devil-mcp-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "brain-fight-mcp-"));
   const dbPath = path.join(dir, "test.sqlite3");
-  process.env.ANGEL_DEVIL_DB_PATH = dbPath;
+  process.env.BRAIN_FIGHT_DB_PATH = dbPath;
   getDb();
   return dbPath;
 }
@@ -25,8 +25,8 @@ export function teardownIsolatedDb(dbPath: string): void {
   } catch {
     // Best-effort cleanup; OS temp will reclaim leftover files.
   }
-  if (process.env.ANGEL_DEVIL_DB_PATH === dbPath) {
-    delete process.env.ANGEL_DEVIL_DB_PATH;
+  if (process.env.BRAIN_FIGHT_DB_PATH === dbPath) {
+    delete process.env.BRAIN_FIGHT_DB_PATH;
   }
 }
 

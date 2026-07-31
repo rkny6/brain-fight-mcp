@@ -1,7 +1,40 @@
+# Dependencies
 node_modules/
+
+# Build output
 dist/
+
+# Local SQLite state (default path is under ~/.brain-fight-mcp/, but keep local copies out too)
 *.sqlite3
 *.sqlite3-journal
 *.sqlite3-wal
 *.sqlite3-shm
+
+# Logs / coverage / caches
+*.log
+npm-debug.log*
+coverage/
+.nyc_output/
+.cache/
+.turbo/
+*.tsbuildinfo
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local archives / accidental dumps (do not commit)
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+Archive*

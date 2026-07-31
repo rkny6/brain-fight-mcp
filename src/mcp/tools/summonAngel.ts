@@ -21,14 +21,22 @@ export function registerSummonAngelTool(server: McpServer): void {
       const profile = getProfile("angel");
       const template = findTopicTemplate([input.context, input.topic].filter(Boolean).join(" "));
 
+      const perspective = {
+        position: template.angel.position,
+        reasoning: template.angel.reasoning,
+        concern: template.angel.concern,
+      };
+
       const result = {
         profile,
-        perspective: {
-          position: template.angel.position,
-          reasoning: template.angel.reasoning,
-          concern: template.angel.concern,
-        },
-        performance_instructions: buildSummonPerformanceInstructions("angel"),
+        perspective,
+        // Plan A: Client LLM writes Angel's monologue from profile + optional seed.
+        performance_instructions: buildSummonPerformanceInstructions(
+          "angel",
+          profile,
+          perspective,
+          { userContext: [input.context, input.topic].filter(Boolean).join(" ") },
+        ),
       };
 
       return {

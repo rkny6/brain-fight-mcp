@@ -12,9 +12,13 @@ import { DEFAULT_RELATIONSHIP_STATE } from "../types/index.js";
 const EXPECTED_TOOLS = [
   "summon_angel",
   "summon_devil",
-  "start_inner_conflict",
+  "start_debate",
+  "continue_conflict_turn",
+  "end_inner_conflict",
+  "record_decision_outcome",
   "get_relationship",
   "reset_relationship",
+  "clear_database",
 ] as const;
 
 async function connectTestClient(): Promise<{
@@ -36,6 +40,72 @@ async function connectTestClient(): Promise<{
   };
 }
 
+/**
+ * Runs a debate to settlement via start_debate with intensity "low" (2 max
+ * turns), then ends it. One-shot full mode no longer exists, so any test
+ * that just needs "a settled conflict" for setup has to walk this whole
+ * sequence now.
+ */
+async function runDebateToSettlement(
+  client: Client,
+  args: {
+    context: string;
+    sessionId: string;
+    winner?: "angel" | "devil" | "draw";
+    extraStartArgs?: Record<string, unknown>;
+  },
+): Promise<{
+  conflictId: string;
+  ended: {
+    ok: boolean;
+    ended: boolean;
+    winner: string;
+    relationship: { totalConflicts: number; recentWinner: string | null };
+    conflict: { id: string };
+    performance_instructions: string;
+  };
+}> {
+  const openResult = await client.callTool({
+    name: "start_debate",
+    arguments: {
+      context: args.context,
+      sessionId: args.sessionId,
+      intensity: "low",
+      ...args.extraStartArgs,
+    },
+  });
+  const opened = parseToolJson<{
+    conflictId: string;
+    turn: { shouldEnd: boolean };
+  }>(openResult as { content: Array<{ type: string; text?: string }> });
+
+  if (!opened.turn.shouldEnd) {
+    await client.callTool({
+      name: "continue_conflict_turn",
+      arguments: { sessionId: args.sessionId, conflictId: opened.conflictId },
+    });
+  }
+
+  const endResult = await client.callTool({
+    name: "end_inner_conflict",
+    arguments: {
+      sessionId: args.sessionId,
+      conflictId: opened.conflictId,
+      winner: args.winner ?? "angel",
+    },
+  });
+  const ended = parseToolJson<{
+    ok: boolean;
+    ended: boolean;
+    winner: string;
+    relationship: { totalConflicts: number; recentWinner: string | null };
+    conflict: { id: string };
+    performance_instructions: string;
+  }>(endResult as { content: Array<{ type: string; text?: string }> });
+
+  return { conflictId: opened.conflictId, ended };
+}
+
 describe("MCP server (integration)", () => {
   let dbPath = "";
   let client: Client;
@@ -51,7 +121,7 @@ describe("MCP server (integration)", () => {
     teardownIsolatedDb(dbPath);
   });
 
-  it("lists all five tools", async () => {
+  it("lists all registered tools", async () => {
     const listed = await client.listTools();
     const names = listed.tools.map((t) => t.name).sort();
     expect(names).toEqual([...EXPECTED_TOOLS].sort());
@@ -89,6 +159,7 @@ describe("MCP server (integration)", () => {
     expect(body.perspective.position.toLowerCase()).toMatch(/quit|plan|don't/);
     expect(body.perspective.concern).toBeTruthy();
     expect(body.performance_instructions.toLowerCase()).toContain("angel");
+    expect(body.performance_instructions).toMatch(/GENERATE|Client LLM/i);
   });
 
   it("summon_devil returns a bold perspective with performance instructions", async () => {
@@ -109,52 +180,22 @@ describe("MCP server (integration)", () => {
     expect(body.profile.archetype).toBe("devil");
     expect(body.perspective.temptation).toBeTruthy();
     expect(body.performance_instructions.toLowerCase()).toContain("devil");
+    expect(body.performance_instructions).toMatch(/GENERATE|Client LLM/i);
   });
 
-  it("start_inner_conflict persists state and updates the relationship", async () => {
+  it("start_debate through end_inner_conflict persists state and updates the relationship", async () => {
     const sessionId = "conflict-flow";
 
-    const conflictResult = await client.callTool({
-      name: "start_inner_conflict",
-      arguments: {
-        context: "I'm thinking about whether I should quit my job",
-        intensity: "high",
-        sessionId,
-      },
+    const { ended } = await runDebateToSettlement(client, {
+      context: "I'm thinking about whether I should quit my job",
+      sessionId,
+      winner: "angel",
     });
 
-    const conflict = parseToolJson<{
-      context: string;
-      angel: { position: string; reasoning: string };
-      devil: { position: string; reasoning: string };
-      conflict: {
-        id: string;
-        coreDisagreement: string;
-        likelyWinner: string | null;
-        isRoleReversal: boolean;
-        absurdityLevel: number;
-      };
-      continuity: { hasPrior: boolean };
-      relationship: {
-        sessionId: string;
-        totalConflicts: number;
-        recentWinner: string | null;
-      };
-      recent_memory: Array<{ id: string; context: string }>;
-      performance_instructions: string;
-    }>(conflictResult as { content: Array<{ type: string; text?: string }> });
-
-    expect(conflict.context).toContain("quit my job");
-    expect(conflict.angel.position).toBeTruthy();
-    expect(conflict.devil.position).toBeTruthy();
-    expect(conflict.conflict.absurdityLevel).toBe(0.9);
-    expect(conflict.conflict.coreDisagreement).toMatch(/security|momentum/i);
-    expect(conflict.relationship.sessionId).toBe(sessionId);
-    expect(conflict.relationship.totalConflicts).toBe(1);
-    expect(conflict.recent_memory).toHaveLength(1);
-    expect(conflict.performance_instructions).toMatch(/debate|Angel|Devil/i);
-    expect(conflict.continuity.hasPrior).toBe(false);
-
+    expect(ended.ok).toBe(true);
+    expect(ended.relationship.totalConflicts).toBe(1);
+    expect(ended.relationship.recentWinner).toBe("angel");
+    expect(ended.performance_instructions).toMatch(/DEBATE CLOSED|OUT of character/i);
 
     const relResult = await client.callTool({
       name: "get_relationship",
@@ -171,19 +212,16 @@ describe("MCP server (integration)", () => {
     }>(relResult as { content: Array<{ type: string; text?: string }> });
 
     expect(rel.relationship.totalConflicts).toBe(1);
-    expect(rel.relationship.recentWinner).toBe(conflict.conflict.likelyWinner);
+    expect(rel.relationship.recentWinner).toBe("angel");
     expect(rel.recent_memory[0].context).toContain("quit my job");
   });
 
   it("reset_relationship requires confirm and can wipe a session", async () => {
     const sessionId = "reset-flow";
 
-    await client.callTool({
-      name: "start_inner_conflict",
-      arguments: {
-        context: "Should I apologize first?",
-        sessionId,
-      },
+    await runDebateToSettlement(client, {
+      context: "Should I apologize first?",
+      sessionId,
     });
 
     const denied = await client.callTool({
@@ -238,34 +276,250 @@ describe("MCP server (integration)", () => {
     expect(afterBody.recent_memory).toHaveLength(0);
   });
 
+  it("start_debate opens, continues alternating, and ends with relationship settle", async () => {
+    const sessionId = "turn-flow";
+
+    const openResult = await client.callTool({
+      name: "start_debate",
+      arguments: {
+        context: "Should I quit my job tomorrow?",
+        intensity: "low",
+        firstSpeaker: "devil",
+        sessionId,
+      },
+    });
+    const opened = parseToolJson<{
+      mode: string;
+      conflictId: string;
+      turn: {
+        index: number;
+        maxTurns: number;
+        speaker: string;
+        shouldEnd: boolean;
+      };
+      relationship: { totalConflicts: number };
+      performance_instructions: string;
+    }>(openResult as { content: Array<{ type: string; text?: string }> });
+
+    expect(opened.mode).toBe("turn");
+    expect(opened.turn.speaker).toBe("devil");
+    expect(opened.turn.index).toBe(1);
+    expect(opened.turn.maxTurns).toBe(2);
+    expect(opened.relationship.totalConflicts).toBe(0);
+    expect(opened.performance_instructions).toMatch(/ONLY SPEAKER/i);
+    expect(opened.performance_instructions.toLowerCase()).toContain("devil");
+
+    const midRel = await client.callTool({
+      name: "get_relationship",
+      arguments: { sessionId },
+    });
+    const mid = parseToolJson<{
+      relationship: { totalConflicts: number };
+      recent_memory: unknown[];
+    }>(midRel as { content: Array<{ type: string; text?: string }> });
+    expect(mid.relationship.totalConflicts).toBe(0);
+    expect(mid.recent_memory).toHaveLength(0);
+
+    const contResult = await client.callTool({
+      name: "continue_conflict_turn",
+      arguments: {
+        sessionId,
+        conflictId: opened.conflictId,
+        lastUtterance: "Devil: Quit. Send the email.",
+      },
+    });
+    const cont = parseToolJson<{
+      ok: boolean;
+      turn: {
+        index: number;
+        speaker: string;
+        shouldEnd: boolean;
+      };
+      performance_instructions: string;
+    }>(contResult as { content: Array<{ type: string; text?: string }> });
+
+    expect(cont.ok).toBe(true);
+    expect(cont.turn.index).toBe(2);
+    expect(cont.turn.speaker).toBe("angel");
+    expect(cont.turn.shouldEnd).toBe(true);
+    expect(cont.performance_instructions).toMatch(/ONLY SPEAKER/i);
+    expect(cont.performance_instructions.toLowerCase()).toContain("angel");
+
+    const pastCap = await client.callTool({
+      name: "continue_conflict_turn",
+      arguments: { sessionId, conflictId: opened.conflictId },
+    });
+    const pastBody = parseToolJson<{ ok: boolean; error: string }>(
+      pastCap as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(pastBody.ok).toBe(false);
+    expect(pastBody.error).toBe("max_turns_reached");
+
+    const endResult = await client.callTool({
+      name: "end_inner_conflict",
+      arguments: {
+        sessionId,
+        conflictId: opened.conflictId,
+        winner: "angel",
+        lastUtterance: "Angel: Wait — pad the runway first.",
+      },
+    });
+    const ended = parseToolJson<{
+      ok: boolean;
+      ended: boolean;
+      winner: string;
+      relationship: { totalConflicts: number; recentWinner: string | null };
+      performance_instructions: string;
+    }>(endResult as { content: Array<{ type: string; text?: string }> });
+
+    expect(ended.ok).toBe(true);
+    expect(ended.ended).toBe(true);
+    expect(ended.winner).toBe("angel");
+    expect(ended.relationship.totalConflicts).toBe(1);
+    expect(ended.relationship.recentWinner).toBe("angel");
+    expect(ended.performance_instructions).toMatch(/DEBATE CLOSED|OUT of character/i);
+
+    const forceOpen = await client.callTool({
+      name: "start_debate",
+      arguments: {
+        context: "Should I text my ex?",
+        intensity: "medium",
+        firstSpeaker: "angel",
+        sessionId,
+      },
+    });
+    const forced = parseToolJson<{
+      conflictId: string;
+      turn: { speaker: string; index: number };
+    }>(forceOpen as { content: Array<{ type: string; text?: string }> });
+    expect(forced.turn.speaker).toBe("angel");
+
+    const forceCont = await client.callTool({
+      name: "continue_conflict_turn",
+      arguments: {
+        sessionId,
+        conflictId: forced.conflictId,
+        speaker: "angel",
+        userInterjection: "Angel, be honest — is this nostalgia?",
+      },
+    });
+    const forcedTurn = parseToolJson<{
+      turn: { speaker: string; isDoubleTap: boolean };
+      performance_instructions: string;
+    }>(forceCont as { content: Array<{ type: string; text?: string }> });
+    expect(forcedTurn.turn.speaker).toBe("angel");
+    expect(forcedTurn.turn.isDoubleTap).toBe(true);
+    expect(forcedTurn.performance_instructions).toMatch(/USER INTERJECTION|DOUBLE-TAP/i);
+  });
+
+  it("clear_database requires confirm and wipes all sessions", async () => {
+    await runDebateToSettlement(client, {
+      context: "Should I quit my job?",
+      sessionId: "clear-db-a",
+    });
+    await runDebateToSettlement(client, {
+      context: "Should I buy this now?",
+      sessionId: "clear-db-b",
+    });
+
+    const denied = await client.callTool({
+      name: "clear_database",
+      arguments: { confirm: false },
+    });
+    const deniedBody = parseToolJson<{ cleared: boolean; message: string }>(
+      denied as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(deniedBody.cleared).toBe(false);
+
+    const stillA = await client.callTool({
+      name: "get_relationship",
+      arguments: { sessionId: "clear-db-a" },
+    });
+    const stillABody = parseToolJson<{
+      relationship: { totalConflicts: number };
+      recent_memory: unknown[];
+    }>(stillA as { content: Array<{ type: string; text?: string }> });
+    expect(stillABody.relationship.totalConflicts).toBe(1);
+    expect(stillABody.recent_memory).toHaveLength(1);
+
+    const confirmed = await client.callTool({
+      name: "clear_database",
+      arguments: { confirm: true },
+    });
+    const clearBody = parseToolJson<{
+      cleared: boolean;
+      deleted: { relationshipsDeleted: number; conflictsDeleted: number };
+    }>(confirmed as { content: Array<{ type: string; text?: string }> });
+
+    expect(clearBody.cleared).toBe(true);
+    expect(clearBody.deleted.relationshipsDeleted).toBeGreaterThanOrEqual(2);
+    expect(clearBody.deleted.conflictsDeleted).toBeGreaterThanOrEqual(2);
+
+    for (const sessionId of ["clear-db-a", "clear-db-b"] as const) {
+      const after = await client.callTool({
+        name: "get_relationship",
+        arguments: { sessionId },
+      });
+      const afterBody = parseToolJson<{
+        relationship: {
+          totalConflicts: number;
+          angelRespect: number;
+          recentWinner: string | null;
+        };
+        recent_memory: unknown[];
+      }>(after as { content: Array<{ type: string; text?: string }> });
+
+      // getOrCreate recreates a default row after a full wipe.
+      expect(afterBody.relationship.totalConflicts).toBe(0);
+      expect(afterBody.relationship.recentWinner).toBeNull();
+      expect(afterBody.relationship.angelRespect).toBe(
+        DEFAULT_RELATIONSHIP_STATE.angelRespect,
+      );
+      expect(afterBody.recent_memory).toHaveLength(0);
+    }
+  });
+
   it("injects continuity from the previous conflict on round two", async () => {
     const sessionId = "continuity-arc";
 
-    const round1 = await client.callTool({
-      name: "start_inner_conflict",
+    const round1Open = await client.callTool({
+      name: "start_debate",
       arguments: {
         context: "I'm thinking about whether I should quit my job",
-        intensity: "medium",
+        intensity: "low",
         sessionId,
       },
     });
     const first = parseToolJson<{
+      conflictId: string;
       angel: { position: string };
-      conflict: { likelyWinner: string | null };
       continuity: { hasPrior: boolean };
-    }>(round1 as { content: Array<{ type: string; text?: string }> });
+      turn: { shouldEnd: boolean };
+    }>(round1Open as { content: Array<{ type: string; text?: string }> });
 
     expect(first.continuity.hasPrior).toBe(false);
 
-    const round2 = await client.callTool({
-      name: "start_inner_conflict",
+    if (!first.turn.shouldEnd) {
+      await client.callTool({
+        name: "continue_conflict_turn",
+        arguments: { sessionId, conflictId: first.conflictId },
+      });
+    }
+    await client.callTool({
+      name: "end_inner_conflict",
+      arguments: { sessionId, conflictId: first.conflictId, winner: "angel" },
+    });
+
+    const round2Open = await client.callTool({
+      name: "start_debate",
       arguments: {
         context: "If I'm not panicking anymore, can I leave now?",
-        intensity: "high",
+        intensity: "low",
         sessionId,
       },
     });
     const second = parseToolJson<{
+      conflictId: string;
       angel: { reasoning: string };
       devil: { reasoning: string };
       continuity: {
@@ -275,7 +529,8 @@ describe("MCP server (integration)", () => {
       performance_instructions: string;
       relationship: { totalConflicts: number };
       recent_memory: unknown[];
-    }>(round2 as { content: Array<{ type: string; text?: string }> });
+      turn: { shouldEnd: boolean };
+    }>(round2Open as { content: Array<{ type: string; text?: string }> });
 
     expect(second.continuity.hasPrior).toBe(true);
     expect(second.continuity.prior?.angelPosition).toBe(first.angel.position);
@@ -283,18 +538,31 @@ describe("MCP server (integration)", () => {
     expect(second.devil.reasoning).toContain(first.angel.position);
     expect(second.performance_instructions).toContain("CONTINUITY");
     expect(second.performance_instructions).toContain(first.angel.position);
-    expect(second.relationship.totalConflicts).toBe(2);
-    expect(second.recent_memory).toHaveLength(2);
+    // relationship/recent_memory here reflect state BEFORE round two settles.
+    expect(second.relationship.totalConflicts).toBe(1);
+    expect(second.recent_memory).toHaveLength(1);
+
+    if (!second.turn.shouldEnd) {
+      await client.callTool({
+        name: "continue_conflict_turn",
+        arguments: { sessionId, conflictId: second.conflictId },
+      });
+    }
+    const round2End = await client.callTool({
+      name: "end_inner_conflict",
+      arguments: { sessionId, conflictId: second.conflictId, winner: "angel" },
+    });
+    const ended2 = parseToolJson<{ relationship: { totalConflicts: number } }>(
+      round2End as { content: Array<{ type: string; text?: string }> },
+    );
+    expect(ended2.relationship.totalConflicts).toBe(2);
   });
 
   it("keeps relationship state isolated between sessions", async () => {
 
-    await client.callTool({
-      name: "start_inner_conflict",
-      arguments: {
-        context: "Should I quit my job?",
-        sessionId: "alpha",
-      },
+    await runDebateToSettlement(client, {
+      context: "Should I quit my job?",
+      sessionId: "alpha",
     });
 
     const beta = await client.callTool({
@@ -321,12 +589,9 @@ describe("MCP server (integration)", () => {
 
   it("reads relationship state via resource after a conflict", async () => {
     const sessionId = "resource-session";
-    await client.callTool({
-      name: "start_inner_conflict",
-      arguments: {
-        context: "generic dilemma with no special keywords",
-        sessionId,
-      },
+    await runDebateToSettlement(client, {
+      context: "generic dilemma with no special keywords",
+      sessionId,
     });
 
     const resource = await client.readResource({

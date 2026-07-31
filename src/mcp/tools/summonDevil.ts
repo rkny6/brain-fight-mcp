@@ -21,14 +21,22 @@ export function registerSummonDevilTool(server: McpServer): void {
       const profile = getProfile("devil");
       const template = findTopicTemplate([input.context, input.topic].filter(Boolean).join(" "));
 
+      const perspective = {
+        position: template.devil.position,
+        reasoning: template.devil.reasoning,
+        temptation: template.devil.temptation,
+      };
+
       const result = {
         profile,
-        perspective: {
-          position: template.devil.position,
-          reasoning: template.devil.reasoning,
-          temptation: template.devil.temptation,
-        },
-        performance_instructions: buildSummonPerformanceInstructions("devil"),
+        perspective,
+        // Plan A: Client LLM writes Devil's monologue from profile + optional seed.
+        performance_instructions: buildSummonPerformanceInstructions(
+          "devil",
+          profile,
+          perspective,
+          { userContext: [input.context, input.topic].filter(Boolean).join(" ") },
+        ),
       };
 
       return {

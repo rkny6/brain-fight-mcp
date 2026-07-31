@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { getDb } from "../database.js";
-import type { ConflictRecord, Winner } from "../../types/index.js";
+import type { ConflictRecord, TopicDomain, Winner } from "../../types/index.js";
 
 interface ConflictRow {
   id: string;
   session_id: string;
+  domain: string;
   context: string;
   topic: string | null;
   angel_position: string;
@@ -18,6 +19,7 @@ function rowToRecord(row: ConflictRow): ConflictRecord {
   return {
     id: row.id,
     sessionId: row.session_id,
+    domain: row.domain as TopicDomain,
     context: row.context,
     topic: row.topic ?? undefined,
     angelPosition: row.angel_position,
@@ -30,6 +32,7 @@ function rowToRecord(row: ConflictRow): ConflictRecord {
 
 export interface SaveConflictInput {
   sessionId: string;
+  domain: TopicDomain;
   context: string;
   topic?: string;
   angelPosition: string;
@@ -44,6 +47,7 @@ export function saveConflict(input: SaveConflictInput): ConflictRecord {
   const record: ConflictRecord = {
     id: randomUUID(),
     sessionId: input.sessionId,
+    domain: input.domain,
     context: input.context,
     topic: input.topic,
     angelPosition: input.angelPosition,
@@ -55,21 +59,30 @@ export function saveConflict(input: SaveConflictInput): ConflictRecord {
 
   db.prepare(
     `INSERT INTO conflicts (
-       id, session_id, context, topic,
+       id, session_id, domain, context, topic,
        angel_position, devil_position, winner,
        absurdity_level, created_at
-     ) VALUES (@id, @sessionId, @context, @topic, @angelPosition, @devilPosition, @winner, @absurdityLevel, @createdAt)`
+     ) VALUES (@id, @sessionId, @domain, @context, @topic, @angelPosition, @devilPosition, @winner, @absurdityLevel, @createdAt)`
   ).run({ ...record, topic: record.topic ?? null, winner: record.winner });
 
   return record;
 }
 
-/** Retrieves the most recent conflicts for a session, newest first. */
+/** Retrieves the most recent conflicts for a session, newest first. Pass a domain to scope it. */
 export function getRecentConflicts(
   sessionId: string,
-  limit = 5
+  limit = 5,
+  domain?: TopicDomain,
 ): ConflictRecord[] {
   const db = getDb();
+  if (domain) {
+    const rows = db
+      .prepare<[string, string, number], ConflictRow>(
+        "SELECT * FROM conflicts WHERE session_id = ? AND domain = ? ORDER BY created_at DESC LIMIT ?"
+      )
+      .all(sessionId, domain, limit);
+    return rows.map(rowToRecord);
+  }
   const rows = db
     .prepare<[string, number], ConflictRow>(
       "SELECT * FROM conflicts WHERE session_id = ? ORDER BY created_at DESC LIMIT ?"
@@ -78,8 +91,35 @@ export function getRecentConflicts(
   return rows.map(rowToRecord);
 }
 
-/** Deletes all conflicts for a session (used by reset_relationship). */
-export function deleteConflicts(sessionId: string): void {
+/**
+ * Direct primary-key lookup, scoped to a session. Use this (not
+ * getRecentConflicts + .find) to check whether a specific conflict.id
+ * exists — "recent N" is an approximation that silently goes stale once
+ * a session accumulates more than N conflicts, which would incorrectly
+ * reject outcomes reported for genuinely real but older conflicts.
+ */
+export function getConflictById(
+  id: string,
+  sessionId: string
+): ConflictRecord | null {
   const db = getDb();
-  db.prepare("DELETE FROM conflicts WHERE session_id = ?").run(sessionId);
+  const row = db
+    .prepare<[string, string], ConflictRow>(
+      "SELECT * FROM conflicts WHERE id = ? AND session_id = ?"
+    )
+    .get(id, sessionId);
+  return row ? rowToRecord(row) : null;
+}
+
+/** Deletes conflicts for a session (used by reset_relationship). Pass a domain to scope it. */
+export function deleteConflicts(sessionId: string, domain?: TopicDomain): void {
+  const db = getDb();
+  if (domain) {
+    db.prepare("DELETE FROM conflicts WHERE session_id = ? AND domain = ?").run(
+      sessionId,
+      domain,
+    );
+  } else {
+    db.prepare("DELETE FROM conflicts WHERE session_id = ?").run(sessionId);
+  }
 }

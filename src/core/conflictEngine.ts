@@ -2,14 +2,20 @@ import {
   INTENSITY_VALUE,
   type ConflictEngineOutput,
   type ConflictRecord,
+  type ConflictSeed,
+  type ConstraintSeed,
+  type DebateBrief,
   type Intensity,
+  type LegacyStanceSeed,
   type RelationshipState,
   type SidePosition,
   type Winner,
 } from "../types/index.js";
-import { findTopicTemplate, type TopicTemplate } from "../prompts/conflict.js";
-import { ANGEL_CLOSERS, ANGEL_OPENERS } from "../prompts/angel.js";
-import { DEVIL_CLOSERS, DEVIL_OPENERS } from "../prompts/devil.js";
+import {
+  extractUserDetails,
+  findTopicTemplateDetailed,
+  type TopicTemplate,
+} from "../prompts/conflict.js";
 import {
   applyCallbackToReasoning,
   buildContinuityHooks,
@@ -24,60 +30,44 @@ const ROLE_REVERSAL_CHANCE = 0.15;
 const ANGEL_RESPECT_ACCOMMODATING_THRESHOLD = 0.7;
 const DEVIL_ANNOYANCE_CONTRARIAN_THRESHOLD = 0.8;
 
-function pick<T>(items: T[]): T {
-  return items[Math.floor(Math.random() * items.length)];
-}
-
-/**
- * Scales how much reasoning text is shown based on intensity, and adds
- * theatrical openers/closers so low intensity reads as a quick aside and
- * high intensity reads as a dramatic monologue.
- */
-function dramatizeReasoning(
-  baseReasoning: string,
-  intensityValue: number,
-  side: "angel" | "devil"
-): string {
-  const opener = side === "angel" ? pick(ANGEL_OPENERS) : pick(DEVIL_OPENERS);
-  const closer = side === "angel" ? pick(ANGEL_CLOSERS) : pick(DEVIL_CLOSERS);
-
-  if (intensityValue <= 0.3) {
-    // Low intensity: short, clipped, barely an aside.
-    return `${opener} ${baseReasoning}`;
-  }
-  if (intensityValue <= 0.6) {
-    // Medium intensity: opener + reasoning + closer.
-    return `${opener} ${baseReasoning} ${closer}`;
-  }
-  // High intensity: full dramatic monologue with emphasis.
-  return `${opener} ${baseReasoning} And honestly? ${closer}`;
-}
-
-/**
- * Sharpens a position statement's wording as intensity rises, without
- * changing its underlying stance — a "hotter take" on the same idea.
- */
-function intensifyPosition(position: string, intensityValue: number): string {
-  if (intensityValue <= 0.3) {
-    return position;
-  }
-  if (intensityValue <= 0.6) {
-    return `${position} Seriously.`;
-  }
-  return `${position.replace(/\.$/, "")} — no half measures.`;
-}
-
 interface BuildSideOptions {
   template: TopicTemplate;
   side: "angel" | "devil";
-  intensityValue: number;
   relationship: RelationshipState;
   continuity: ContinuityHooks;
 }
 
+/** True when the seed is the preferred constraint-axis form. */
+export function isConstraintSeed(seed: ConflictSeed): seed is ConstraintSeed {
+  return (
+    typeof seed === "object" &&
+    seed !== null &&
+    "tension" in seed &&
+    "angelMust" in seed &&
+    "devilMust" in seed
+  );
+}
+
+/** True when the seed is the legacy full-stance form. */
+export function isLegacyStanceSeed(seed: ConflictSeed): seed is LegacyStanceSeed {
+  return (
+    typeof seed === "object" &&
+    seed !== null &&
+    "coreDisagreement" in seed &&
+    "angelPosition" in seed
+  );
+}
+
+/**
+ * Builds plain seed stances for the Client LLM.
+ *
+ * Intentionally does NOT splice theatrical openers/closers or intensity
+ * suffix phrases ("Seriously.", "no half measures") into position/reasoning —
+ * those made performance seeds sound like a fixed script. Intensity still
+ * drives absurdityLevel / performance_instructions pacing instead.
+ */
 function buildAngelSide({
   template,
-  intensityValue,
   relationship,
   continuity,
 }: BuildSideOptions): SidePosition {
@@ -92,15 +82,14 @@ function buildAngelSide({
   reasoning = applyCallbackToReasoning(reasoning, continuity.angelCallback);
 
   return {
-    position: intensifyPosition(position, intensityValue),
-    reasoning: dramatizeReasoning(reasoning, intensityValue, "angel"),
+    position,
+    reasoning,
     concern,
   };
 }
 
 function buildDevilSide({
   template,
-  intensityValue,
   relationship,
   continuity,
 }: BuildSideOptions): SidePosition {
@@ -117,8 +106,8 @@ function buildDevilSide({
   reasoning = applyCallbackToReasoning(reasoning, continuity.devilCallback);
 
   return {
-    position: intensifyPosition(position, intensityValue),
-    reasoning: dramatizeReasoning(reasoning, intensityValue, "devil"),
+    position,
+    reasoning,
     temptation,
   };
 }
@@ -153,21 +142,132 @@ function determineLikelyWinner(
   return winner;
 }
 
+/**
+ * Constraint seed → lightweight SidePosition rails (not recitable monologues).
+ * reasoning stays empty so performance_instructions prefer CONSTRAINT AXES.
+ */
+function constraintSeedToTemplate(seed: ConstraintSeed): TopicTemplate {
+  return {
+    keywords: [],
+    coreDisagreement: seed.tension,
+    angel: {
+      position: seed.angelMust,
+      reasoning: "",
+      concern: seed.angelMust,
+    },
+    devil: {
+      position: seed.devilMust,
+      reasoning: "",
+      temptation: seed.devilMust,
+    },
+  };
+}
+
+/** Legacy full-stance seed → TopicTemplate (still accepted for compatibility). */
+function legacySeedToTemplate(seed: LegacyStanceSeed): TopicTemplate {
+  return {
+    keywords: [],
+    coreDisagreement: seed.coreDisagreement,
+    angel: {
+      position: seed.angelPosition,
+      reasoning: seed.angelReasoning,
+      concern: seed.angelConcern,
+    },
+    devil: {
+      position: seed.devilPosition,
+      reasoning: seed.devilReasoning,
+      temptation: seed.devilTemptation,
+    },
+  };
+}
+
+/**
+ * Converts a caller-supplied seed into a TopicTemplate shape so it can flow
+ * through role-reversal + relationship-bias + continuity unchanged.
+ */
+export function seedToTemplate(seed: ConflictSeed): TopicTemplate {
+  if (isConstraintSeed(seed)) {
+    return constraintSeedToTemplate(seed);
+  }
+  return legacySeedToTemplate(seed);
+}
+
+function briefFromConstraintSeed(seed: ConstraintSeed): DebateBrief {
+  return {
+    tension: seed.tension,
+    angelMust: seed.angelMust,
+    devilMust: seed.devilMust,
+    userDetails: seed.userDetails ?? [],
+    forbidden: seed.forbidden ?? [],
+    source: "constraint_seed",
+  };
+}
+
+function briefFromLegacySeed(seed: LegacyStanceSeed): DebateBrief {
+  return {
+    tension: seed.coreDisagreement,
+    angelMust: seed.angelPosition,
+    devilMust: seed.devilPosition,
+    userDetails: [],
+    forbidden: [],
+    source: "legacy_seed",
+  };
+}
+
+function briefFromTemplate(
+  template: TopicTemplate,
+  situationText: string,
+  match: "keyword" | "overlap" | "generic",
+): DebateBrief {
+  const userDetails = extractUserDetails(situationText);
+  const forbidden =
+    match === "generic"
+      ? [
+          "generic safety vs freedom slogan as the whole argument",
+          "life-advice pamphlet tone with no user facts",
+        ]
+      : [
+          "recite the canned topic template verbatim",
+          "ignore concrete user_details from the situation",
+        ];
+
+  return {
+    tension: template.coreDisagreement,
+    angelMust: template.angel.position,
+    devilMust: template.devil.position,
+    userDetails,
+    forbidden,
+    source: "template",
+  };
+}
+
+/** Swap angel/devil musts when role reversal fires. */
+function applyRoleReversalToBrief(brief: DebateBrief): DebateBrief {
+  return {
+    ...brief,
+    angelMust: brief.devilMust,
+    devilMust: brief.angelMust,
+  };
+}
+
 export interface RunConflictParams {
   context: string;
   topic?: string;
   intensity: Intensity;
   relationship: RelationshipState;
-  /** Newest-first prior conflicts for this session (from recall). */
   priorConflicts?: ConflictRecord[];
+  seed?: ConflictSeed;
 }
 
 /**
  * Runs the deterministic-but-randomized conflict engine:
- * 1. Selects a topic template via keyword match (or generic fallback).
+ * 1. Selects constraint/legacy seed, or (no seed) best keyword/overlap template,
+ *    else generic Safety-vs-Freedom — always extracting userDetails from context.
  * 2. Possibly triggers a role reversal (Enhancement 3).
- * 3. Builds Angel/Devil positions with intensity scaling + relationship bias (Enhancement 2).
- * 4. Injects continuity callbacks from the previous conflict (memory injection).
+ * 3. Builds plain Angel/Devil SidePosition rails with relationship bias.
+ * 4. Injects continuity callbacks from the previous conflict.
+ * 5. Emits a normalized DebateBrief for performance_instructions (constraint axes).
+ * Intensity still sets absurdityLevel / Client pacing; it does not rewrite seed wording.
  */
 export function runConflict({
   context,
@@ -175,10 +275,38 @@ export function runConflict({
   intensity,
   relationship,
   priorConflicts = [],
+  seed,
 }: RunConflictParams): ConflictEngineOutput {
   const intensityValue = INTENSITY_VALUE[intensity];
-  const searchText = [context, topic].filter(Boolean).join(" ");
-  const template = findTopicTemplate(searchText);
+  // Prefer the caller's situation-specific seed. Only fall back to
+  // keyword/overlap-matched templates (and ultimately the generic template) when
+  // no seed was supplied. Even then, extract concrete userDetails from context so
+  // performance_instructions stay grounded instead of pure life-advice soup.
+  let template: TopicTemplate;
+  let brief: DebateBrief;
+  if (seed) {
+    template = seedToTemplate(seed);
+    brief = isConstraintSeed(seed)
+      ? briefFromConstraintSeed(seed)
+      : briefFromLegacySeed(seed);
+    // Legacy seeds often omit userDetails — backfill from free-form context.
+    if (
+      !isConstraintSeed(seed) &&
+      (!brief.userDetails || brief.userDetails.length === 0)
+    ) {
+      brief = {
+        ...brief,
+        userDetails: extractUserDetails(
+          [context, topic].filter(Boolean).join(" "),
+        ),
+      };
+    }
+  } else {
+    const situation = [context, topic].filter(Boolean).join(" ");
+    const found = findTopicTemplateDetailed(situation);
+    template = found.template;
+    brief = briefFromTemplate(template, situation, found.match);
+  }
   const continuityHooks = buildContinuityHooks(priorConflicts);
 
   // --- Role Reversal (Enhancement 3) ---
@@ -208,10 +336,13 @@ export function runConflict({
       }
     : template;
 
+  if (isRoleReversal) {
+    brief = applyRoleReversalToBrief(brief);
+  }
+
   const angel = buildAngelSide({
     template: effectiveTemplate,
     side: "angel",
-    intensityValue,
     relationship,
     continuity: continuityHooks,
   });
@@ -219,7 +350,6 @@ export function runConflict({
   const devil = buildDevilSide({
     template: effectiveTemplate,
     side: "devil",
-    intensityValue,
     relationship,
     continuity: continuityHooks,
   });
@@ -239,6 +369,6 @@ export function runConflict({
       angelCallback: continuityHooks.angelCallback,
       devilCallback: continuityHooks.devilCallback,
     },
+    brief,
   };
 }
-
